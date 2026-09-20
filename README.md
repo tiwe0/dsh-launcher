@@ -15,6 +15,12 @@
 
 `dsh-launcher` 是一个小巧的 DeepSeek Harness 桌面启动器：它把 Node、npm 和 DSH 收进独立运行环境，让不同 DSH 版本并存，并用一个启动页面完成版本选择、工作目录选择、启动、关闭与重启。
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/launcher.png" alt="dsh-launcher 启动页面" />
+</p>
+
 ## 为什么需要它
 
 DeepSeek Harness（DSH）仍在快速迭代，不同版本可能包含破坏性变化。直接更新全局安装容易让现有工作流失效，也会把 Node、npm 和 DSH 的状态混入系统环境。

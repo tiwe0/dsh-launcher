@@ -15,6 +15,12 @@
 
 `dsh-launcher` is a compact desktop launcher for DeepSeek Harness. It keeps Node, npm, and DSH in an isolated runtime, supports side-by-side DSH versions, and turns version selection, workspace selection, launch, stop, and restart into one small desktop screen.
 
+## Interface preview
+
+<p align="center">
+  <img src="docs/launcher.png" alt="dsh-launcher launch screen" />
+</p>
+
 ## Why dsh-launcher
 
 DeepSeek Harness is evolving quickly, and releases may introduce breaking changes. Updating a global installation can disrupt an existing workflow while mixing Node, npm, and DSH state with the host environment.

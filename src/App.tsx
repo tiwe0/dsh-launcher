@@ -102,6 +102,12 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function displayWorkspacePath(path: string) {
+  const isDefaultUnixWorkspace = /^\/(?:Users|home)\/[^/]+\/\.dsh-launcher$/.test(path);
+  const isDefaultWindowsWorkspace = /^[A-Za-z]:\\Users\\[^\\]+\\\.dsh-launcher$/.test(path);
+  return isDefaultUnixWorkspace || isDefaultWindowsWorkspace ? "~/.dsh-launcher" : path;
+}
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState(EMPTY_STATUS);
@@ -444,7 +450,7 @@ export default function App() {
           </Stack>
 
           <Button className="workspace-button" variant="outlined" startIcon={<FolderOpenRounded />} onClick={() => void chooseWorkspace()} disabled={Boolean(busy) || status.running}>
-            <span>{workspace || t("launcher.chooseWorkspace")}</span>
+            <span>{workspace ? displayWorkspacePath(workspace) : t("launcher.chooseWorkspace")}</span>
           </Button>
         </section>
 
