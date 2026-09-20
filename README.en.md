@@ -13,7 +13,7 @@
   <a href="README.md">中文</a> · <strong>English</strong>
 </p>
 
-`dsh launcher` is a compact desktop launcher for DeepSeek Harness. It keeps Node, npm, and DSH in an isolated runtime, supports side-by-side DSH versions, and turns version selection, workspace selection, launch, stop, and restart into one small desktop screen.
+`dsh launcher` is a lightweight desktop launcher for DeepSeek Harness. It manages Node.js, npm, and DSH within an isolated runtime, supports side-by-side installation of multiple DSH versions, and provides a unified interface for version selection, workspace configuration, and process control.
 
 ## Interface preview
 
@@ -23,47 +23,32 @@
 
 ## Why dsh launcher
 
-DeepSeek Harness is evolving quickly, and releases may introduce breaking changes. Updating a global installation can disrupt an existing workflow while mixing Node, npm, and DSH state with the host environment.
+DeepSeek Harness is under active development, and new releases may introduce incompatible changes. Updating a global installation can disrupt established workflows and mix Node.js, npm, and DSH state into the host environment.
 
-`dsh launcher` keeps those changes inside its own application data. You can evaluate a new DSH version without replacing the version that already works or modifying the system Node installation.
+`dsh launcher` stores the relevant components and version data within an application-specific directory. This allows new releases to be evaluated without replacing a verified version or modifying the system Node.js environment.
 
 ## Product capabilities
 
-- **Isolated runtime**: no dependency on system Node, npm, or a global `dsh` installation.
-- **Side-by-side DSH versions**: install, remove, switch, and select a default `@deepseek-ai/dsh` version.
-- **Online version management**: discover remote DSH releases, then download and install them inside the app.
-- **Controlled Node versions**: Node 24 is the recommended default; Node 26 is downloaded only when selected.
-- **One-click runtime control**: automatically open the DSH Web UI after launch, then stop or safely restart it.
-- **Isolated workspace default**: use `~/.dsh-launcher` and create it automatically when missing.
-- **China-friendly mirror defaults**: npmmirror is configured for Node downloads and the npm registry.
-- **Aligned CLI environment**: generate a private `dsh` command and place it plus the private Node runtime first in child-process `PATH`, keeping plugin operations on the launcher's profile.
-- **Compact desktop experience**: custom title bar, DeepSeek Harness visual language, and smooth state transitions.
-- **Chinese and English UI**: detect the system language, persist the choice, and toggle instantly.
-
-## Supported platforms
-
-| Platform | x64 | arm64 |
-| --- | :---: | :---: |
-| macOS | CI build | CI build |
-| Windows | CI build | CI build |
-| Linux | CI build | CI build |
-
-GitHub Actions builds all six combinations on native runners. Pushing a `v*` tag collects every platform bundle and automatically publishes a GitHub Release.
+- **Lightweight native desktop application**: uses Tauri and the system WebView without bundling an additional browser engine or any plugins and features unrelated to launching DSH.
+- **Private runtime**: manages Node.js, npm, and DSH without requiring system-level installations; Node.js 24 is recommended by default, while Node.js 26 is downloaded only when required.
+- **DSH version management**: supports online release discovery and installation, side-by-side versions, switching, removal, and default-version selection without overwriting an existing usable version.
+- **Complete runtime control**: launches DSH Web within a selected workspace and stops or safely restarts the process created by the application; the default `~/.dsh-launcher` workspace is created automatically if it does not exist.
+- **Consistent command environment**: places private DSH and Node.js executables at the beginning of child-process `PATH` and uses npmmirror by default for Node.js downloads and npm packages, preventing plugins from being installed into a different runtime profile.
 
 ## Quick start
 
 ### Download an application bundle
 
-1. Open [Releases](https://github.com/tiwe0/dsh-launcher/releases).
-2. Download the archive matching your operating system and CPU architecture.
-3. Extract and launch `dsh launcher`.
-4. Keep the recommended Node 24, choose a DSH version and workspace, then select Launch.
+1. Visit the [Releases](https://github.com/tiwe0/dsh-launcher/releases) page.
+2. Download the archive corresponding to the current operating system and CPU architecture.
+3. Extract the archive and launch `dsh launcher`.
+4. Retain the recommended Node.js 24 selection, choose a DSH version and workspace, and then select **Launch**.
 
-Current bundles are not Apple-notarized, Windows code-signed, or signed for a Linux package repository. Your operating system may display an unsigned application warning.
+Current release artifacts have not undergone Apple notarization, Windows code signing, or Linux repository signing. The operating system may therefore display an unsigned application warning.
 
 ### Local development
 
-Install Node 24, Rust stable, and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+Local development requires Node.js 24, Rust stable, and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 npm ci
@@ -71,7 +56,7 @@ npm run build
 npm run tauri dev
 ```
 
-Run the complete local validation set:
+Run the following commands to complete the local validation suite:
 
 ```bash
 npm run prepare:sidecar
@@ -93,21 +78,21 @@ React + MUI
     -> selected workspace
 ```
 
-- macOS and Linux use bundled NVM resources to manage the private Node runtime.
-- Windows uses a private portable Node runtime without relying on WSL, Git Bash, or system Node.
-- DSH receives its own `DSH_HOME`, with every version installed in a separate directory.
-- DSH inherits the current user's `HOME`, so Git, SSH, and shell configuration remain available. Set `DSH_LAUNCHER_ISOLATE_HOME=1` to opt into a fully isolated HOME.
-- The app displays the private `DSH_HOME` and CLI shim so the same profile can be used from a terminal.
-- Runtime state and version metadata remain in the user's application data directory.
+- macOS and Linux use NVM resources distributed with the application to manage the private Node.js runtime.
+- Windows uses an application-specific portable Node.js runtime without requiring WSL, Git Bash, or a system Node.js installation.
+- DSH uses a dedicated `DSH_HOME`, with each version installed in a separate directory.
+- By default, DSH inherits the current user's `HOME` so that existing Git, SSH, and shell configuration remains available. Set `DSH_LAUNCHER_ISOLATE_HOME=1` to isolate `HOME` as well.
+- The application displays the private `DSH_HOME` and command-line shim, allowing the same runtime profile to be accessed from a terminal.
+- Runtime state and version metadata are stored in the user's application data directory.
 
-This is **runtime and version isolation**, not an operating-system security sandbox. DSH child processes still run with the permissions of the current user.
+This isolation applies only to the **runtime environment and version data**; it does not constitute an operating-system security sandbox. DSH child processes continue to run with the permissions of the current user.
 
-## Current boundaries
+## Current limitations
 
-- DSH may still introduce breaking changes. Side-by-side versions reduce upgrade risk but cannot guarantee third-party compatibility.
-- CI artifacts are currently unsigned and are intended for development, testing, and internal validation.
-- The launcher currently exposes only Node 24 and 26, and downloads Node 24 by default.
-- China-friendly mirrors are the current defaults and do not yet have a graphical configuration screen.
+- Future DSH releases may still introduce incompatible changes. Side-by-side installation reduces upgrade risk but cannot guarantee compatibility with third-party components.
+- CI artifacts are currently unsigned and are recommended only for development, testing, and internal validation.
+- The launcher currently supports Node.js 24 and 26, and downloads only Node.js 24 by default.
+- npmmirror is currently the default mirror source and does not yet have a graphical configuration interface.
 
 ## Technology
 
@@ -115,7 +100,7 @@ This is **runtime and version isolation**, not an operating-system security sand
 - React 19 + TypeScript + Vite
 - Material UI + motion transitions
 - i18next + react-i18next
-- A native Rust sidecar for Node/DSH installation, version management, and process control
+- A native Rust sidecar for Node.js and DSH installation, version management, and process control
 
 > `dsh launcher` is a community project and is not an official DeepSeek distribution. DeepSeek, DeepSeek Harness, and their related marks belong to their respective owners.
 
