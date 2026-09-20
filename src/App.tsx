@@ -26,6 +26,7 @@ import {
   DeleteOutlineRounded,
   DownloadRounded,
   FolderOpenRounded,
+  GitHub,
   RemoveRounded,
   PowerSettingsNewRounded,
   RefreshRounded,
@@ -362,6 +363,7 @@ export default function App() {
   const showRuntimeActions = status.running || stopping || restarting;
   const activeLanguage = (i18n.resolvedLanguage ?? i18n.language).startsWith("zh") ? "zh" : "en";
   const languageButtonLabel = activeLanguage === "zh" ? t("language.toggleToEnglish") : t("language.toggleToChinese");
+  const harnessUrl = activeLanguage === "zh" ? "https://www.deepseek.com/harness/" : "https://www.deepseek.com/harness/en";
 
   function toggleLanguage() {
     if (languageChanging) return;
@@ -386,12 +388,17 @@ export default function App() {
   return (
     <Box className={`page ${languageChanging ? "is-language-changing" : ""}`}>
       <header className="window-chrome" data-tauri-drag-region aria-label={t("window.controls")}>
-        <div className="brand-lockup" data-tauri-drag-region>
+        <button className="brand-lockup brand-link" type="button" aria-label={t("brand.openHarness")} onClick={() => void openUrl(harnessUrl)}>
           <img className="brand-mark" src="/deepseek-mark.svg" alt="" />
           <span className="brand-name">deepseek</span>
           <span className="brand-badge">{t("brand.badge")}</span>
-        </div>
+        </button>
         <div className="chrome-tools">
+          <Tooltip title={t("links.openGitHub")}>
+            <IconButton className="window-action" size="small" aria-label={t("links.openGitHub")} onClick={() => void openUrl("https://github.com/tiwe0/dsh-launcher")}>
+              <GitHub fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title={languageButtonLabel}>
             <IconButton className="window-action language-button" size="small" aria-label={languageButtonLabel} onClick={toggleLanguage} disabled={languageChanging}>
               <span className="language-icon" style={{ transform: `rotate(${languageTurns * 360}deg)` }}>

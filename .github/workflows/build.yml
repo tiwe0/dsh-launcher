@@ -155,3 +155,40 @@ jobs:
           path: src-tauri/target/${{ matrix.target }}/release/bundle/**
           if-no-files-found: error
           compression-level: 6
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: desktop
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download desktop bundles
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          for artifact_dir in release-artifacts/*; do
+            artifact_name="$(basename "$artifact_dir")"
+            if [[ "$artifact_name" == *windows* ]]; then
+              (cd "$artifact_dir" && zip -r "../../release/${artifact_name}.zip" .)
+            else
+              tar -C "$artifact_dir" -czf "release/${artifact_name}.tar.gz" .
+            fi
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          release/*
+          --repo "${GITHUB_REPOSITORY}"
+          --verify-tag
+          --generate-notes
+          --title "dsh-launcher ${GITHUB_REF_NAME}"

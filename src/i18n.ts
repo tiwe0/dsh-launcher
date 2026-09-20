@@ -18,6 +18,10 @@ const resources = {
       brand: {
         badge: "Harness 启动器",
         tagline: "万物皆插件。",
+        openHarness: "打开 DeepSeek Harness 官网",
+      },
+      links: {
+        openGitHub: "在 GitHub 打开项目",
       },
       launcher: {
         config: "启动配置",
@@ -93,6 +97,10 @@ const resources = {
       brand: {
         badge: "Harness Launcher",
         tagline: "Everything is a plugin.",
+        openHarness: "Open the DeepSeek Harness website",
+      },
+      links: {
+        openGitHub: "Open the project on GitHub",
       },
       launcher: {
         config: "Launch configuration",
