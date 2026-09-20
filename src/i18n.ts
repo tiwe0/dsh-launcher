@@ -11,7 +11,7 @@ const resources = {
         toggleToChinese: "Switch to Chinese",
       },
       window: {
-        controls: "dsh-launcher 窗口控制",
+        controls: "dsh launcher 窗口控制",
         minimize: "最小化",
         close: "关闭",
       },
@@ -22,6 +22,20 @@ const resources = {
       },
       links: {
         openGitHub: "在 GitHub 打开项目",
+      },
+      settings: {
+        open: "高级配置",
+        title: "高级配置",
+        back: "返回启动器",
+        pageDescription: "管理 dsh launcher 的独立运行环境与持久化配置。",
+        runtimeTitle: "DSH 运行环境",
+        description: "自定义 DSH 的配置与 profile 存储目录。",
+        chooseDshHome: "选择 DSH_HOME 目录",
+        defaultPath: "默认：{{path}}",
+        appliesNextLaunch: "新的目录将在下次启动 DSH 时生效。",
+        saved: "DSH_HOME 已保存",
+        restoreDefault: "恢复默认",
+        save: "保存",
       },
       launcher: {
         config: "启动配置",
@@ -90,7 +104,7 @@ const resources = {
         toggleToChinese: "Switch to Chinese",
       },
       window: {
-        controls: "dsh-launcher window controls",
+        controls: "dsh launcher window controls",
         minimize: "Minimize",
         close: "Close",
       },
@@ -101,6 +115,20 @@ const resources = {
       },
       links: {
         openGitHub: "Open the project on GitHub",
+      },
+      settings: {
+        open: "Advanced settings",
+        title: "Advanced settings",
+        back: "Back to launcher",
+        pageDescription: "Manage the isolated runtime and persistent settings used by dsh launcher.",
+        runtimeTitle: "DSH runtime",
+        description: "Choose where DSH stores configuration and profiles.",
+        chooseDshHome: "Choose the DSH_HOME folder",
+        defaultPath: "Default: {{path}}",
+        appliesNextLaunch: "The new folder will be used the next time DSH starts.",
+        saved: "DSH_HOME saved",
+        restoreDefault: "Restore default",
+        save: "Save",
       },
       launcher: {
         config: "Launch configuration",

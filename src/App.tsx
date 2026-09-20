@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type AnimationEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -20,6 +20,7 @@ import {
 } from "@mui/material";
 import {
   AddRounded,
+  ArrowBackRounded,
   ArrowOutwardRounded,
   CheckRounded,
   CloseRounded,
@@ -31,6 +32,7 @@ import {
   PowerSettingsNewRounded,
   RefreshRounded,
   RestartAltRounded,
+  SettingsRounded,
   StopRounded,
   TranslateRounded,
 } from "@mui/icons-material";
@@ -60,6 +62,12 @@ type DshVersion = {
   installed: boolean;
   isDefault: boolean;
   isRunning: boolean;
+};
+
+type DshHomeSettings = {
+  dshHome: string;
+  defaultDshHome: string;
+  customized: boolean;
 };
 
 type RuntimeStateEvent = {
@@ -123,8 +131,17 @@ export default function App() {
   const [newVersion, setNewVersion] = useState(DEFAULT_DSH_VERSION);
   const [languageTurns, setLanguageTurns] = useState(0);
   const [languageChanging, setLanguageChanging] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [viewPhase, setViewPhase] = useState<"idle" | "exiting" | "entering">("idle");
+  const [viewDirection, setViewDirection] = useState<"forward" | "backward">("forward");
+  const [dshHomeSettings, setDshHomeSettings] = useState<DshHomeSettings | null>(null);
+  const [dshHomeDraft, setDshHomeDraft] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const restartPending = useRef(false);
   const languageSwapTimer = useRef<number | null>(null);
+  const pendingSettingsOpen = useRef<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -363,6 +380,72 @@ export default function App() {
     }
   }
 
+  async function openAdvancedSettings() {
+    beginViewTransition(true);
+    setSettingsBusy(true);
+    setSettingsError(null);
+    setSettingsSaved(false);
+    try {
+      const settings = await invoke<DshHomeSettings>("get_dsh_home_settings");
+      setDshHomeSettings(settings);
+      setDshHomeDraft(settings.dshHome);
+    } catch (settingsLoadError) {
+      setSettingsError(errorText(settingsLoadError));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function chooseDshHome() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: t("settings.chooseDshHome"),
+      defaultPath: dshHomeDraft || undefined,
+    });
+    if (typeof selected === "string") {
+      setDshHomeDraft(selected);
+      setSettingsSaved(false);
+    }
+  }
+
+  async function saveDshHome(path: string | null) {
+    setSettingsBusy(true);
+    setSettingsError(null);
+    setSettingsSaved(false);
+    try {
+      const settings = await invoke<DshHomeSettings>("set_dsh_home", { path });
+      setDshHomeSettings(settings);
+      setDshHomeDraft(settings.dshHome);
+      setSettingsSaved(true);
+    } catch (settingsSaveError) {
+      setSettingsError(errorText(settingsSaveError));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  function beginViewTransition(nextSettingsOpen: boolean) {
+    if (viewPhase !== "idle" || nextSettingsOpen === settingsOpen) return;
+    pendingSettingsOpen.current = nextSettingsOpen;
+    setViewDirection(nextSettingsOpen ? "forward" : "backward");
+    setViewPhase("exiting");
+  }
+
+  function handleViewAnimationEnd(event: AnimationEvent<HTMLDivElement>) {
+    if (event.currentTarget !== event.target) return;
+    if (viewPhase === "exiting") {
+      const nextSettingsOpen = pendingSettingsOpen.current;
+      if (nextSettingsOpen !== null) setSettingsOpen(nextSettingsOpen);
+      setViewPhase("entering");
+      return;
+    }
+    if (viewPhase === "entering") {
+      pendingSettingsOpen.current = null;
+      setViewPhase("idle");
+    }
+  }
+
   const launching = busy === "setup" || busy === "start";
   const stopping = busy === "stop";
   const restarting = busy === "restart";
@@ -405,6 +488,21 @@ export default function App() {
               <GitHub fontSize="small" />
             </IconButton>
           </Tooltip>
+          <Tooltip title={t("settings.open")}>
+            <IconButton
+              className={`window-action settings-button ${settingsOpen ? "is-open" : ""}`}
+              size="small"
+              aria-label={t("settings.open")}
+              aria-pressed={settingsOpen}
+              disabled={viewPhase !== "idle"}
+              onClick={() => {
+                if (settingsOpen) beginViewTransition(false);
+                else void openAdvancedSettings();
+              }}
+            >
+              <SettingsRounded className="settings-icon" fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title={languageButtonLabel}>
             <IconButton className="window-action language-button" size="small" aria-label={languageButtonLabel} onClick={toggleLanguage} disabled={languageChanging}>
               <span className="language-icon" style={{ transform: `rotate(${languageTurns * 360}deg)` }}>
@@ -423,7 +521,79 @@ export default function App() {
         </div>
       </header>
 
-      <main className="launcher-frame">
+      <div
+        className={`view-stage is-${viewPhase} is-${viewDirection}`}
+        onAnimationEnd={handleViewAnimationEnd}
+      >
+        {settingsOpen ? (
+          <main className="advanced-settings-page" aria-labelledby="advanced-settings-title">
+          <div className="settings-page-shell">
+            <div className="settings-page-topline">
+              <Button className="settings-back" color="inherit" size="small" startIcon={<ArrowBackRounded />} onClick={() => beginViewTransition(false)} disabled={viewPhase !== "idle"}>
+                {t("settings.back")}
+              </Button>
+
+              <div className="settings-page-heading">
+                <div>
+                  <Typography id="advanced-settings-title" component="h1">{t("settings.title")}</Typography>
+                  <Typography>{t("settings.pageDescription")}</Typography>
+                </div>
+                {settingsBusy && <CircularProgress size={20} thickness={4} />}
+              </div>
+            </div>
+
+            <section className="settings-section" aria-labelledby="runtime-settings-title">
+              <div className="settings-section-copy">
+                <Typography id="runtime-settings-title" component="h2">{t("settings.runtimeTitle")}</Typography>
+                <Typography>{t("settings.description")}</Typography>
+              </div>
+
+              <div className="settings-section-control">
+                <Stack className="settings-path-row" direction="row" spacing={1} alignItems="flex-start">
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="DSH_HOME"
+                    value={dshHomeDraft}
+                    onChange={(event) => {
+                      setDshHomeDraft(event.target.value);
+                      setSettingsSaved(false);
+                    }}
+                    disabled={settingsBusy}
+                    helperText={dshHomeSettings ? t("settings.defaultPath", { path: dshHomeSettings.defaultDshHome }) : " "}
+                  />
+                  <Tooltip title={t("settings.chooseDshHome")}>
+                    <span>
+                      <IconButton className="settings-folder-button" aria-label={t("settings.chooseDshHome")} onClick={() => void chooseDshHome()} disabled={settingsBusy}>
+                        <FolderOpenRounded fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Stack>
+
+                {status.running && <Typography className="settings-note" variant="caption">{t("settings.appliesNextLaunch")}</Typography>}
+                {settingsError && <Alert severity="error">{settingsError}</Alert>}
+                {settingsSaved && (
+                  <Typography className="settings-saved" variant="caption">
+                    <CheckRounded fontSize="inherit" />
+                    {t("settings.saved")}
+                  </Typography>
+                )}
+              </div>
+            </section>
+
+            <div className="settings-page-actions">
+              <Button color="inherit" onClick={() => void saveDshHome(null)} disabled={settingsBusy || !dshHomeSettings?.customized}>
+                {t("settings.restoreDefault")}
+              </Button>
+              <Button variant="contained" onClick={() => void saveDshHome(dshHomeDraft.trim())} disabled={settingsBusy || !dshHomeDraft.trim()}>
+                {t("settings.save")}
+              </Button>
+            </div>
+          </div>
+          </main>
+        ) : (
+          <main className="launcher-frame">
         <section className="selectors" aria-label={t("launcher.config")}>
           <Box>
             <Typography component="h1" variant="h1">{t("launcher.title")}</Typography>
@@ -481,7 +651,9 @@ export default function App() {
           </div>
           {status.running && status.endpoint && <Button className="open-dsh" size="small" endIcon={<ArrowOutwardRounded />} onClick={() => void openUrl(status.endpoint!)}>{t("launcher.openDsh")}</Button>}
         </section>
-      </main>
+          </main>
+        )}
+      </div>
 
       <Box className="status-block" aria-live="polite">
         <span className={`live-dot ${status.ready ? "ready" : ""}`} />

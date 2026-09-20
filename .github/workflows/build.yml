@@ -191,4 +191,4 @@ jobs:
           --repo "${GITHUB_REPOSITORY}"
           --verify-tag
           --generate-notes
-          --title "dsh-launcher ${GITHUB_REF_NAME}"
+          --title "dsh launcher ${GITHUB_REF_NAME}"

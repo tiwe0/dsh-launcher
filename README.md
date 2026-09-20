@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="dsh-launcher banner" />
+  <img src="docs/banner.svg" alt="dsh launcher banner" />
 </p>
 
 <p align="center">
@@ -13,19 +13,19 @@
   <strong>中文</strong> · <a href="README.en.md">English</a>
 </p>
 
-`dsh-launcher` 是一个小巧的 DeepSeek Harness 桌面启动器：它把 Node、npm 和 DSH 收进独立运行环境，让不同 DSH 版本并存，并用一个启动页面完成版本选择、工作目录选择、启动、关闭与重启。
+`dsh launcher` 是一个小巧的 DeepSeek Harness 桌面启动器：它把 Node、npm 和 DSH 收进独立运行环境，让不同 DSH 版本并存，并用一个启动页面完成版本选择、工作目录选择、启动、关闭与重启。
 
 ## 界面预览
 
 <p align="center">
-  <img src="docs/launcher.png" alt="dsh-launcher 启动页面" />
+  <img src="docs/launcher.png" alt="dsh launcher 启动页面" />
 </p>
 
 ## 为什么需要它
 
 DeepSeek Harness（DSH）仍在快速迭代，不同版本可能包含破坏性变化。直接更新全局安装容易让现有工作流失效，也会把 Node、npm 和 DSH 的状态混入系统环境。
 
-`dsh-launcher` 将这些变化隔离在应用自己的目录内。你可以验证新版本而不覆盖当前可用版本，也不需要修改系统 Node 环境。
+`dsh launcher` 将这些变化隔离在应用自己的目录内。你可以验证新版本而不覆盖当前可用版本，也不需要修改系统 Node 环境。
 
 ## 产品能力
 
@@ -36,6 +36,7 @@ DeepSeek Harness（DSH）仍在快速迭代，不同版本可能包含破坏性�
 - **一键运行控制**：启动成功后自动打开 DSH Web，运行中可关闭或安全重启。
 - **工作目录隔离**：默认使用 `~/.dsh-launcher`，目录不存在时自动创建。
 - **国内镜像默认值**：Node 使用 npmmirror 镜像，npm 使用 npmmirror registry。
+- **命令行环境对齐**：生成应用私有的 `dsh` 命令，并将它和私有 Node 优先放入子进程 `PATH`，避免插件安装落到另一套 profile。
 - **紧凑桌面体验**：无系统标题栏、DeepSeek Harness 视觉风格与流畅状态动画。
 - **中英文界面**：自动检测系统语言、记住用户选择，并支持即时切换。
 
@@ -55,7 +56,7 @@ GitHub Actions 在对应架构的原生 runner 上构建六个平台组合。推
 
 1. 打开 [Releases](https://github.com/tiwe0/dsh-launcher/releases)。
 2. 下载与操作系统和 CPU 架构匹配的压缩包。
-3. 解压并启动 `dsh-launcher`。
+3. 解压并启动 `dsh launcher`。
 4. 保留推荐的 Node 24，选择 DSH 版本和工作目录，然后点击启动。
 
 当前构建尚未进行 Apple notarization、Windows code signing 或 Linux 仓库签名，操作系统可能显示未签名应用提示。
@@ -95,6 +96,8 @@ React + MUI
 - macOS 与 Linux 使用打包的 NVM 资源管理私有 Node。
 - Windows 使用应用私有的便携 Node，不依赖 WSL、Git Bash 或系统 Node。
 - DSH 使用独立的 `DSH_HOME`，每个版本安装在独立目录。
+- DSH 会继承当前用户的 `HOME`，因此 Git、SSH 与 shell 配置保持可用；如需完全隔离 HOME，可设置 `DSH_LAUNCHER_ISOLATE_HOME=1`。
+- 应用内会显示私有 `DSH_HOME` 与命令行 shim，可复制该命令在终端中操作同一个 profile。
 - 运行目录和版本元数据保存在用户应用数据目录中。
 
 这是**运行环境与版本隔离**，不是操作系统权限沙箱。DSH 子进程仍拥有启动它的当前用户权限。
@@ -114,7 +117,7 @@ React + MUI
 - i18next + react-i18next
 - 原生 Rust sidecar 负责 Node/DSH 安装、版本管理与进程控制
 
-> `dsh-launcher` 是社区项目，并非 DeepSeek 官方发行的软件。DeepSeek、DeepSeek Harness 及相关标识归其各自权利人所有。
+> `dsh launcher` 是社区项目，并非 DeepSeek 官方发行的软件。DeepSeek、DeepSeek Harness 及相关标识归其各自权利人所有。
 
 ## Star History
 

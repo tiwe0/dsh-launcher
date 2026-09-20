@@ -14,7 +14,7 @@ DeepSeek Harness users, developers, and plugin authors who need to test fast-mov
 
 ## Product purpose
 
-`dsh-launcher` turns an unstable command-line environment into a compact, visible, and reversible desktop launch flow. Users explicitly choose a Node version, a DSH version, and a workspace before launching. The app owns the private runtime, reports real process state, opens the Web UI, and can stop or safely restart the exact process it started.
+`dsh launcher` turns an unstable command-line environment into a compact, visible, and reversible desktop launch flow. Users explicitly choose a Node version, a DSH version, and a workspace before launching. The app owns the private runtime, reports real process state, opens the Web UI, and can stop or safely restart the exact process it started.
 
 ## Product promises
 

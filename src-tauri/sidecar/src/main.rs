@@ -1,14 +1,23 @@
 use flate2::read::GzDecoder;
 use semver::Version;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashSet,
     env,
+    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
     thread,
+};
+
+#[cfg(unix)]
+use std::{
+    io::Read,
+    sync::{mpsc, OnceLock},
+    time::Duration,
 };
 
 const DEFAULT_NODE_VERSION: &str = "24.21.0";
@@ -59,6 +68,12 @@ struct LogLine<'a> {
     line: &'a str,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeSettings {
+    dsh_home: Option<PathBuf>,
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
@@ -80,6 +95,15 @@ fn run() -> Result<u8, String> {
     match action.as_str() {
         "inspect" => {
             ensure_no_extra(args)?;
+            emit_status(&runtime_dir, false, None, None);
+            Ok(0)
+        }
+        "runtime-env" => {
+            ensure_no_extra(args)?;
+            let node_version = default_node_version(&runtime_dir)
+                .ok_or_else(|| "Node.js runtime is not ready".to_string())?;
+            default_version(&runtime_dir).ok_or_else(|| "DSH runtime is not ready".to_string())?;
+            write_runtime_shim(&runtime_dir, &node_version)?;
             emit_status(&runtime_dir, false, None, None);
             Ok(0)
         }
@@ -183,8 +207,21 @@ fn nvm_dir(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("nvm")
 }
 
+fn runtime_bin_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("bin")
+}
+
 fn dsh_root(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("dsh")
+}
+
+fn dsh_home_dir(runtime_dir: &Path) -> PathBuf {
+    fs::read(runtime_dir.join("settings.json"))
+        .ok()
+        .and_then(|contents| serde_json::from_slice::<RuntimeSettings>(&contents).ok())
+        .and_then(|settings| settings.dsh_home)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| runtime_dir.join("dsh-home"))
 }
 
 fn dsh_prefix(runtime_dir: &Path, version: &str) -> PathBuf {
@@ -227,6 +264,122 @@ fn dsh_entry(runtime_dir: &Path, version: &str) -> PathBuf {
         .join("dsh")
         .join("lib")
         .join("bin.js")
+}
+
+fn push_unique_paths(paths: &mut Vec<PathBuf>, seen: &mut HashSet<OsString>, raw: &OsStr) {
+    for path in env::split_paths(raw) {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        let key = path.as_os_str().to_os_string();
+        if seen.insert(key) {
+            paths.push(path);
+        }
+    }
+}
+
+fn compose_child_path(
+    runtime_dir: &Path,
+    node_version: &str,
+    login_path: Option<&OsStr>,
+    inherited_path: Option<&OsStr>,
+) -> Result<OsString, String> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path in [
+        runtime_bin_dir(runtime_dir),
+        node_bin_dir(runtime_dir, node_version),
+    ] {
+        if seen.insert(path.as_os_str().to_os_string()) {
+            paths.push(path);
+        }
+    }
+    if let Some(path) = login_path {
+        push_unique_paths(&mut paths, &mut seen, path);
+    }
+    if let Some(path) = inherited_path {
+        push_unique_paths(&mut paths, &mut seen, path);
+    }
+    #[cfg(unix)]
+    for fallback in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        let path = PathBuf::from(fallback);
+        if seen.insert(path.as_os_str().to_os_string()) {
+            paths.push(path);
+        }
+    }
+
+    env::join_paths(paths).map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn parse_shell_path(output: &[u8]) -> Option<OsString> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('/') && line.contains(':'))
+        .map(OsString::from)
+}
+
+#[cfg(unix)]
+fn query_shell_path(mode: &str) -> Option<OsString> {
+    let shell = env::var_os("SHELL")
+        .filter(|value| Path::new(value).is_absolute())
+        .unwrap_or_else(|| OsString::from("/bin/zsh"));
+    let mut child = Command::new(shell)
+        .args([mode, "printf '%s\\n' \"$PATH\""])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout.read_to_end(&mut output).map(|_| output);
+        let _ = sender.send(result);
+    });
+
+    match receiver.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(output)) => {
+            let status = child.wait().ok()?;
+            status
+                .success()
+                .then(|| parse_shell_path(&output))
+                .flatten()
+        }
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn login_shell_path() -> Option<OsString> {
+    static LOGIN_PATH: OnceLock<Option<OsString>> = OnceLock::new();
+    LOGIN_PATH
+        .get_or_init(|| query_shell_path("-ilc").or_else(|| query_shell_path("-lc")))
+        .clone()
+}
+
+#[cfg(not(unix))]
+fn login_shell_path() -> Option<OsString> {
+    None
+}
+
+fn child_path(runtime_dir: &Path, node_version: &str) -> Result<OsString, String> {
+    let login_path = login_shell_path();
+    let inherited_path = env::var_os("PATH");
+    compose_child_path(
+        runtime_dir,
+        node_version,
+        login_path.as_deref(),
+        inherited_path.as_deref(),
+    )
 }
 
 fn executable(name: &str) -> String {
@@ -289,7 +442,7 @@ fn emit_status(runtime_dir: &Path, running: bool, pid: Option<u32>, active_versi
         },
         dsh_version: selected,
         nvm_dir: nvm_dir(runtime_dir).to_string_lossy().into_owned(),
-        dsh_home: runtime_dir.join("dsh-home").to_string_lossy().into_owned(),
+        dsh_home: dsh_home_dir(runtime_dir).to_string_lossy().into_owned(),
         runtime_dir: runtime_dir.to_string_lossy().into_owned(),
         endpoint: None,
         pid,
@@ -372,7 +525,7 @@ fn emit_remote_versions(runtime_dir: &Path) -> Result<(), String> {
         "--registry",
         NPM_REGISTRY,
     ]);
-    sanitize_environment(&mut command, runtime_dir)?;
+    apply_isolation(&mut command, runtime_dir, isolate_home_requested())?;
     let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(format!(
@@ -458,7 +611,7 @@ node --version
             .args(["-c", script])
             .env("DSH_NVM_DIR", &nvm)
             .env("DSH_NODE_VERSION", node_version);
-        sanitize_environment(&mut command, runtime_dir)?;
+        apply_isolation(&mut command, runtime_dir, isolate_home_requested())?;
         if relay_spawn(command)? != 0 || !node_ready(runtime_dir, node_version) {
             return Err("Node.js runtime setup failed".into());
         }
@@ -511,7 +664,7 @@ Expand-Archive -LiteralPath $env:DSH_NODE_ARCHIVE -DestinationPath $env:DSH_NODE
         .env("DSH_NODE_URL", url)
         .env("DSH_NODE_ARCHIVE", &archive)
         .env("DSH_NODE_STAGING", &staging);
-    sanitize_environment(&mut command, runtime_dir)?;
+    apply_isolation(&mut command, runtime_dir, isolate_home_requested())?;
     if relay_spawn(command)? != 0 || !extracted.join(executable("node")).is_file() {
         return Err("portable Node.js runtime setup failed".into());
     }
@@ -525,11 +678,93 @@ Expand-Archive -LiteralPath $env:DSH_NODE_ARCHIVE -DestinationPath $env:DSH_NODE
     Ok(())
 }
 
+#[cfg(unix)]
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+#[cfg(unix)]
+fn write_runtime_shim(runtime_dir: &Path, node_version: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin_dir = runtime_bin_dir(runtime_dir);
+    fs::create_dir_all(&bin_dir).map_err(|error| error.to_string())?;
+    let shim = bin_dir.join("dsh");
+    let runtime = shell_quote(runtime_dir);
+    let dsh_home = shell_quote(&dsh_home_dir(runtime_dir));
+    let npm_cache = shell_quote(&runtime_dir.join("npm-cache"));
+    let nvm = shell_quote(&nvm_dir(runtime_dir));
+    let xdg_config = shell_quote(&runtime_dir.join("xdg/config"));
+    let xdg_cache = shell_quote(&runtime_dir.join("xdg/cache"));
+    let xdg_data = shell_quote(&runtime_dir.join("xdg/data"));
+    let node = shell_quote(&node_path(runtime_dir, node_version));
+    let script = format!(
+        r#"#!/bin/sh
+set -eu
+runtime={runtime}
+version="${{DSH_LAUNCHER_VERSION:-}}"
+if [ -z "$version" ]; then
+  IFS= read -r version < "$runtime/dsh/default-version"
+fi
+case "$version" in
+  ""|*[!0-9A-Za-z.+-]*) echo "invalid DSH version: $version" >&2; exit 2 ;;
+esac
+export DSH_HOME={dsh_home}
+export NPM_CONFIG_CACHE={npm_cache}
+export NPM_CONFIG_REGISTRY={NPM_REGISTRY}
+export NPM_CONFIG_DISTURL={NODE_MIRROR}
+export NVM_NODEJS_ORG_MIRROR={NODE_MIRROR}
+export NODEJS_ORG_MIRROR={NODE_MIRROR}
+export XDG_CONFIG_HOME={xdg_config}
+export XDG_CACHE_HOME={xdg_cache}
+export XDG_DATA_HOME={xdg_data}
+export NVM_DIR={nvm}
+exec {node} "$runtime/dsh/$version/node_modules/@deepseek-ai/dsh/lib/bin.js" "$@"
+"#
+    );
+    fs::write(&shim, script).map_err(|error| error.to_string())?;
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn write_runtime_shim(runtime_dir: &Path, node_version: &str) -> Result<(), String> {
+    let bin_dir = runtime_bin_dir(runtime_dir);
+    fs::create_dir_all(&bin_dir).map_err(|error| error.to_string())?;
+    let shim = bin_dir.join("dsh.cmd");
+    let runtime = runtime_dir.to_string_lossy();
+    let dsh_home = dsh_home_dir(runtime_dir).to_string_lossy().into_owned();
+    let script = format!(
+        "@echo off\r\n\
+setlocal\r\n\
+set \"DSH_LAUNCHER_RUNTIME={runtime}\"\r\n\
+if not defined DSH_LAUNCHER_VERSION set /p DSH_LAUNCHER_VERSION=<\"%DSH_LAUNCHER_RUNTIME%\\dsh\\default-version\"\r\n\
+set \"DSH_HOME={dsh_home}\"\r\n\
+set \"NPM_CONFIG_CACHE=%DSH_LAUNCHER_RUNTIME%\\npm-cache\"\r\n\
+set \"NPM_CONFIG_REGISTRY={NPM_REGISTRY}\"\r\n\
+set \"NPM_CONFIG_DISTURL={NODE_MIRROR}\"\r\n\
+set \"NVM_NODEJS_ORG_MIRROR={NODE_MIRROR}\"\r\n\
+set \"NODEJS_ORG_MIRROR={NODE_MIRROR}\"\r\n\
+set \"XDG_CONFIG_HOME=%DSH_LAUNCHER_RUNTIME%\\xdg\\config\"\r\n\
+set \"XDG_CACHE_HOME=%DSH_LAUNCHER_RUNTIME%\\xdg\\cache\"\r\n\
+set \"XDG_DATA_HOME=%DSH_LAUNCHER_RUNTIME%\\xdg\\data\"\r\n\
+set \"NVM_DIR=%DSH_LAUNCHER_RUNTIME%\\nvm\"\r\n\
+\"{}\" \"%DSH_LAUNCHER_RUNTIME%\\dsh\\%DSH_LAUNCHER_VERSION%\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js\" %*\r\n",
+        node_path(runtime_dir, node_version).to_string_lossy()
+    );
+    fs::write(shim, script).map_err(|error| error.to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_runtime_shim(_runtime_dir: &Path, _node_version: &str) -> Result<(), String> {
+    Err("unsupported operating system".into())
+}
+
 fn install_dsh(runtime_dir: &Path, version: &str) -> Result<(), String> {
     validate_version(version)?;
     let node_version = default_node_version(runtime_dir)
         .ok_or_else(|| "Node.js runtime is not ready; run setup first".to_string())?;
     if installed(runtime_dir, version) {
+        write_runtime_shim(runtime_dir, &node_version)?;
         return Ok(());
     }
     let prefix = dsh_prefix(runtime_dir, version);
@@ -543,20 +778,15 @@ fn install_dsh(runtime_dir: &Path, version: &str) -> Result<(), String> {
         .arg(&prefix)
         .arg("--save-exact")
         .arg(package);
-    let mut paths = vec![node_bin_dir(runtime_dir, &node_version)];
-    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
-    command.env(
-        "PATH",
-        env::join_paths(paths).map_err(|error| error.to_string())?,
-    );
-    sanitize_environment(&mut command, runtime_dir)?;
+    command.env("PATH", child_path(runtime_dir, &node_version)?);
+    apply_isolation(&mut command, runtime_dir, isolate_home_requested())?;
     let code = relay_spawn(command)?;
     if code != 0 || !installed(runtime_dir, version) {
         return Err(format!(
             "DSH {version} installation failed with exit code {code}"
         ));
     }
-    Ok(())
+    write_runtime_shim(runtime_dir, &node_version)
 }
 
 fn set_default(runtime_dir: &Path, version: &str) -> Result<(), String> {
@@ -643,6 +873,7 @@ fn start(runtime_dir: PathBuf, raw_args: Vec<std::ffi::OsString>) -> Result<u8, 
     if !entry.is_file() {
         return Err(format!("DSH {version} is not installed"));
     }
+    write_runtime_shim(&runtime_dir, &node_version)?;
 
     let mut command = Command::new(node_path(&runtime_dir, &node_version));
     command.arg(entry);
@@ -653,8 +884,9 @@ fn start(runtime_dir: PathBuf, raw_args: Vec<std::ffi::OsString>) -> Result<u8, 
     if let Some(workspace) = workspace {
         command.current_dir(workspace);
     }
+    command.env("PATH", child_path(&runtime_dir, &node_version)?);
     command.env("NVM_DIR", nvm_dir(&runtime_dir));
-    sanitize_environment(&mut command, &runtime_dir)?;
+    apply_isolation(&mut command, &runtime_dir, isolate_home_requested())?;
     command.stdin(Stdio::null());
     emit_status(
         &runtime_dir,
@@ -684,13 +916,24 @@ fn start(runtime_dir: PathBuf, raw_args: Vec<std::ffi::OsString>) -> Result<u8, 
     }
 }
 
-fn sanitize_environment(command: &mut Command, runtime_dir: &Path) -> Result<(), String> {
-    let home = runtime_dir.join("home");
-    let dsh_home = runtime_dir.join("dsh-home");
+fn isolate_home_requested() -> bool {
+    env::var("DSH_LAUNCHER_ISOLATE_HOME").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn apply_isolation(
+    command: &mut Command,
+    runtime_dir: &Path,
+    isolate_home: bool,
+) -> Result<(), String> {
+    let dsh_home = dsh_home_dir(runtime_dir);
     let npm_cache = runtime_dir.join("npm-cache");
     let xdg_root = runtime_dir.join("xdg");
     for directory in [
-        &home,
         &dsh_home,
         &npm_cache,
         &xdg_root.join("config"),
@@ -699,8 +942,14 @@ fn sanitize_environment(command: &mut Command, runtime_dir: &Path) -> Result<(),
     ] {
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
+    if isolate_home {
+        let home = runtime_dir.join("home");
+        fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+        command.env("HOME", &home);
+        #[cfg(windows)]
+        command.env("USERPROFILE", home);
+    }
     command
-        .env("HOME", home)
         .env("DSH_HOME", dsh_home)
         .env("NPM_CONFIG_CACHE", npm_cache)
         .env("NPM_CONFIG_REGISTRY", NPM_REGISTRY)
@@ -747,10 +996,24 @@ fn relay_reader(reader: Option<impl io::Read>, stream: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_remote_versions, sanitize_environment, validate_node_version, validate_version,
-        NODE_MIRROR, NPM_REGISTRY,
+        apply_isolation, compose_child_path, node_bin_dir, parse_remote_versions, runtime_bin_dir,
+        validate_node_version, validate_version, write_runtime_shim, NODE_MIRROR, NPM_REGISTRY,
     };
-    use std::{collections::HashMap, process::Command};
+    use std::{collections::HashMap, env, path::Path, process::Command};
+
+    fn command_env(command: &Command) -> HashMap<String, String> {
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect()
+    }
 
     #[test]
     fn accepts_semantic_versions() {
@@ -777,18 +1040,18 @@ mod tests {
     fn isolated_commands_default_to_domestic_mirrors() {
         let runtime = std::env::temp_dir().join(format!("dsh-runtime-env-{}", std::process::id()));
         let mut command = Command::new("true");
-        sanitize_environment(&mut command, &runtime).expect("configure isolated environment");
-        let variables = command
-            .get_envs()
-            .filter_map(|(key, value)| {
-                value.map(|value| {
-                    (
-                        key.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-            })
-            .collect::<HashMap<_, _>>();
+        apply_isolation(&mut command, &runtime, false).expect("configure isolated environment");
+        let variables = command_env(&command);
+        assert!(!variables.contains_key("HOME"));
+        assert!(!variables.contains_key("USERPROFILE"));
+        assert_eq!(
+            variables.get("DSH_HOME").map(String::as_str),
+            Some(runtime.join("dsh-home").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            variables.get("XDG_CONFIG_HOME").map(String::as_str),
+            Some(runtime.join("xdg/config").to_string_lossy().as_ref())
+        );
         assert_eq!(
             variables.get("NVM_NODEJS_ORG_MIRROR").map(String::as_str),
             Some(NODE_MIRROR)
@@ -801,6 +1064,122 @@ mod tests {
             variables.get("NPM_CONFIG_REGISTRY").map(String::as_str),
             Some(NPM_REGISTRY)
         );
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn configured_dsh_home_is_used_by_commands_and_shim() {
+        let runtime =
+            std::env::temp_dir().join(format!("dsh-runtime-custom-home-{}", std::process::id()));
+        let custom = std::env::temp_dir().join(format!("dsh-custom-home-{}", std::process::id()));
+        std::fs::create_dir_all(&runtime).expect("create runtime directory");
+        std::fs::write(
+            runtime.join("settings.json"),
+            serde_json::to_vec(&serde_json::json!({ "dshHome": custom }))
+                .expect("serialize settings"),
+        )
+        .expect("write settings");
+
+        let mut command = Command::new("true");
+        apply_isolation(&mut command, &runtime, false).expect("configure isolated environment");
+        let variables = command_env(&command);
+        assert_eq!(
+            variables.get("DSH_HOME").map(String::as_str),
+            Some(custom.to_string_lossy().as_ref())
+        );
+
+        write_runtime_shim(&runtime, "24.21.0").expect("write runtime shim");
+        let shim = if cfg!(windows) {
+            runtime.join("bin/dsh.cmd")
+        } else {
+            runtime.join("bin/dsh")
+        };
+        let contents = std::fs::read_to_string(shim).expect("read runtime shim");
+        assert!(contents.contains(custom.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(runtime);
+        let _ = std::fs::remove_dir_all(custom);
+    }
+
+    #[test]
+    fn home_isolation_is_explicit() {
+        let runtime = std::env::temp_dir().join(format!("dsh-runtime-home-{}", std::process::id()));
+        let mut command = Command::new("true");
+        apply_isolation(&mut command, &runtime, true).expect("configure isolated home");
+        let variables = command_env(&command);
+        assert_eq!(
+            variables.get("HOME").map(String::as_str),
+            Some(runtime.join("home").to_string_lossy().as_ref())
+        );
+        #[cfg(windows)]
+        assert_eq!(variables.get("USERPROFILE"), variables.get("HOME"));
+        assert_eq!(
+            variables.get("DSH_HOME").map(String::as_str),
+            Some(runtime.join("dsh-home").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            variables.get("NPM_CONFIG_REGISTRY").map(String::as_str),
+            Some(NPM_REGISTRY)
+        );
+        assert_eq!(
+            variables.get("XDG_CONFIG_HOME").map(String::as_str),
+            Some(runtime.join("xdg/config").to_string_lossy().as_ref())
+        );
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn child_path_prioritizes_runtime_and_node_and_deduplicates_entries() {
+        let runtime = Path::new("/tmp/dsh runtime");
+        let login = env::join_paths(["/usr/local/bin", "/shared/bin"]).expect("compose login path");
+        let inherited = env::join_paths([
+            "/shared/bin",
+            "/usr/bin",
+            runtime_bin_dir(runtime).to_string_lossy().as_ref(),
+        ])
+        .expect("compose inherited path");
+        let path = compose_child_path(
+            runtime,
+            "24.21.0",
+            Some(login.as_os_str()),
+            Some(inherited.as_os_str()),
+        )
+        .expect("compose child path");
+        let entries = env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(entries[0], runtime.join("bin"));
+        assert_eq!(entries[1], node_bin_dir(runtime, "24.21.0"));
+        assert_eq!(entries[2], Path::new("/usr/local/bin"));
+        assert_eq!(entries[3], Path::new("/shared/bin"));
+        assert_eq!(entries[4], Path::new("/usr/bin"));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| *entry == Path::new("/shared/bin"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| *entry == &runtime.join("bin"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn generated_shim_keeps_home_and_aligns_dsh_home() {
+        let runtime = std::env::temp_dir().join(format!("dsh-runtime-shim-{}", std::process::id()));
+        write_runtime_shim(&runtime, "24.21.0").expect("write runtime shim");
+        let shim = if cfg!(windows) {
+            runtime.join("bin/dsh.cmd")
+        } else {
+            runtime.join("bin/dsh")
+        };
+        let contents = std::fs::read_to_string(shim).expect("read runtime shim");
+        assert!(contents.contains("DSH_HOME"));
+        assert!(contents.contains("NPM_CONFIG_REGISTRY"));
+        assert!(!contents.contains("export HOME="));
+        assert!(!contents.contains("set \"HOME="));
         let _ = std::fs::remove_dir_all(runtime);
     }
 

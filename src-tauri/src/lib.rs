@@ -47,6 +47,33 @@ pub struct DshVersionInfo {
     pub status: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEnvironment {
+    pub node_path: String,
+    pub dsh_entry: String,
+    pub dsh_version: String,
+    pub dsh_home: String,
+    pub shim_path: String,
+    pub shim_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_dsh_home: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LauncherSettingsFile {
+    dsh_home: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DshHomeSettings {
+    dsh_home: String,
+    default_dsh_home: String,
+    customized: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartDshRequest {
@@ -77,6 +104,91 @@ struct RuntimeStateEvent {
 
 fn runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
+}
+
+fn settings_file(directory: &std::path::Path) -> PathBuf {
+    directory.join("settings.json")
+}
+
+fn read_launcher_settings(directory: &std::path::Path) -> LauncherSettingsFile {
+    fs::read(settings_file(directory))
+        .ok()
+        .and_then(|contents| serde_json::from_slice(&contents).ok())
+        .unwrap_or_default()
+}
+
+fn dsh_home_settings(app: &AppHandle) -> Result<DshHomeSettings, String> {
+    let directory = runtime_dir(app)?;
+    let default = directory.join("dsh-home");
+    let configured = read_launcher_settings(&directory).dsh_home;
+    Ok(DshHomeSettings {
+        dsh_home: configured
+            .clone()
+            .unwrap_or_else(|| default.to_string_lossy().into_owned()),
+        default_dsh_home: default.to_string_lossy().into_owned(),
+        customized: configured.is_some(),
+    })
+}
+
+fn resolve_dsh_home(app: &AppHandle, raw: &str) -> Result<PathBuf, String> {
+    let value = raw.trim();
+    let home = app.path().home_dir().map_err(|error| error.to_string())?;
+    let path = if value == "~" {
+        home
+    } else if let Some(relative) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        home.join(relative)
+    } else {
+        PathBuf::from(value)
+    };
+    if !path.is_absolute() {
+        return Err("DSH_HOME must be an absolute path".into());
+    }
+    fs::create_dir_all(&path).map_err(|error| format!("cannot create DSH_HOME: {error}"))?;
+    path.canonicalize()
+        .map_err(|error| format!("cannot resolve DSH_HOME: {error}"))
+}
+
+#[tauri::command]
+fn get_dsh_home_settings(app: AppHandle) -> Result<DshHomeSettings, String> {
+    dsh_home_settings(&app)
+}
+
+#[tauri::command]
+async fn set_dsh_home(app: AppHandle, path: Option<String>) -> Result<DshHomeSettings, String> {
+    let directory = runtime_dir(&app)?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let dsh_home = match path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(
+            resolve_dsh_home(&app, value)?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
+    };
+    let contents = serde_json::to_vec_pretty(&LauncherSettingsFile { dsh_home })
+        .map_err(|error| error.to_string())?;
+    fs::write(settings_file(&directory), contents).map_err(|error| error.to_string())?;
+
+    if directory.join("nvm/default-version").is_file()
+        && directory.join("dsh/default-version").is_file()
+    {
+        run_sidecar(
+            &app,
+            vec![
+                "runtime-env".into(),
+                directory.to_string_lossy().into_owned(),
+            ],
+        )
+        .await?;
+    }
+    dsh_home_settings(&app)
 }
 
 #[tauri::command]
@@ -137,6 +249,12 @@ fn dsh_endpoint(line: &str) -> Option<String> {
     if !value.starts_with("http://127.0.0.1:") {
         return None;
     }
+    if value
+        .chars()
+        .any(|character| matches!(character, '"' | '\'' | '{' | '}' | '\\' | '<' | '>'))
+    {
+        return None;
+    }
     let port = value
         .trim_start_matches("http://127.0.0.1:")
         .split(['/', '?', '#'])
@@ -145,6 +263,19 @@ fn dsh_endpoint(line: &str) -> Option<String> {
         return None;
     }
     Some(value.to_owned())
+}
+
+fn dsh_endpoint_from_output(line: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(line);
+    if let Ok(value) = serde_json::from_str::<Value>(text.trim()) {
+        if value.get("kind").and_then(Value::as_str) == Some("log") {
+            return value
+                .get("line")
+                .and_then(Value::as_str)
+                .and_then(dsh_endpoint);
+        }
+    }
+    dsh_endpoint(&text)
 }
 
 fn parse_protocol_line(app: &AppHandle, line: &[u8], values: &mut Vec<Value>) {
@@ -258,6 +389,71 @@ async fn runtime_status(
     }
     status.endpoint.clone_from(&process.endpoint);
     Ok(status)
+}
+
+#[tauri::command]
+async fn runtime_env(app: AppHandle) -> Result<RuntimeEnvironment, String> {
+    let directory = runtime_dir(&app)?;
+    let values = run_sidecar(
+        &app,
+        vec![
+            "runtime-env".into(),
+            directory.to_string_lossy().into_owned(),
+        ],
+    )
+    .await?;
+    let status = status_from_values(values)?;
+    let node_version = status
+        .node_version
+        .ok_or_else(|| "Node.js runtime is not ready".to_string())?;
+    let dsh_version = status
+        .dsh_version
+        .ok_or_else(|| "DSH runtime is not ready".to_string())?;
+    let node_root = directory
+        .join("nvm")
+        .join("versions")
+        .join("node")
+        .join(format!("v{node_version}"));
+    let node_path = if cfg!(windows) {
+        node_root.join("node.exe")
+    } else {
+        node_root.join("bin/node")
+    };
+    let dsh_entry = directory
+        .join("dsh")
+        .join(&dsh_version)
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    let shim_path = if cfg!(windows) {
+        directory.join("bin/dsh.cmd")
+    } else {
+        directory.join("bin/dsh")
+    };
+    let shim_command = if cfg!(windows) {
+        format!("\"{}\"", shim_path.to_string_lossy())
+    } else {
+        format!("'{}'", shim_path.to_string_lossy().replace('\'', "'\"'\"'"))
+    };
+    let legacy_dsh_home = app
+        .path()
+        .home_dir()
+        .ok()
+        .map(|home| home.join(".dsh"))
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().into_owned());
+
+    Ok(RuntimeEnvironment {
+        node_path: node_path.to_string_lossy().into_owned(),
+        dsh_entry: dsh_entry.to_string_lossy().into_owned(),
+        dsh_version,
+        dsh_home: status.dsh_home,
+        shim_path: shim_path.to_string_lossy().into_owned(),
+        shim_command,
+        legacy_dsh_home,
+    })
 }
 
 #[tauri::command]
@@ -443,8 +639,7 @@ async fn start_dsh(
         while let Some(event) = receiver.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    let text = String::from_utf8_lossy(&line);
-                    if let Some(endpoint) = dsh_endpoint(&text) {
+                    if let Some(endpoint) = dsh_endpoint_from_output(&line) {
                         if let Ok(mut process) = task_app.state::<RuntimeManager>().process.lock() {
                             process.endpoint = Some(endpoint.clone());
                         }
@@ -529,7 +724,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             default_workspace,
+            get_dsh_home_settings,
+            set_dsh_home,
             runtime_status,
+            runtime_env,
             setup_runtime,
             list_dsh_versions,
             list_remote_dsh_versions,
@@ -540,12 +738,12 @@ pub fn run() {
             stop_dsh
         ])
         .run(tauri::generate_context!())
-        .expect("error while running dsh-launcher");
+        .expect("error while running dsh launcher");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::dsh_endpoint;
+    use super::{dsh_endpoint, dsh_endpoint_from_output};
 
     #[test]
     fn extracts_loopback_dsh_endpoint() {
@@ -559,5 +757,20 @@ mod tests {
     fn rejects_non_loopback_or_malformed_endpoint() {
         assert_eq!(dsh_endpoint("dsh web: http://0.0.0.0:4317"), None);
         assert_eq!(dsh_endpoint("dsh web: http://127.0.0.1:not-a-port"), None);
+        assert_eq!(
+            dsh_endpoint("dsh web: http://127.0.0.1:4317/?token=abc\"}"),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_endpoint_from_windows_sidecar_log_protocol() {
+        let line = br#"{"kind":"log","stream":"stdout","line":"dsh web: http://127.0.0.1:59014/?token=fpeV2U3r0_CGTEcGWXpD6mcahI7qevsfCOQbaWAvMJA"}"#;
+        assert_eq!(
+            dsh_endpoint_from_output(line),
+            Some(
+                "http://127.0.0.1:59014/?token=fpeV2U3r0_CGTEcGWXpD6mcahI7qevsfCOQbaWAvMJA".into()
+            )
+        );
     }
 }

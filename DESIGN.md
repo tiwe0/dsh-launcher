@@ -1,4 +1,4 @@
-# dsh-launcher design system
+# dsh launcher design system
 
 ## Intent
 
