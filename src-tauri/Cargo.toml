@@ -1,6 +1,6 @@
 [package]
 name = "dsh-launcher"
-version = "0.1.1"
+version = "0.1.2"
 description = "A compact isolated launcher for DeepSeek Harness"
 authors = ["dsh-launcher contributors"]
 edition = "2021"
