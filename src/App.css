@@ -65,6 +65,7 @@ body {
 }
 
 .brand-badge,
+.brand-version,
 .launcher-frame,
 .advanced-settings-page,
 .status-block {
@@ -75,6 +76,7 @@ body {
 }
 
 .page.is-language-changing .brand-badge,
+.page.is-language-changing .brand-version,
 .page.is-language-changing .launcher-frame,
 .page.is-language-changing .advanced-settings-page,
 .page.is-language-changing .status-block {
@@ -83,6 +85,7 @@ body {
 }
 
 .page.is-language-changing .brand-badge { transform: translateY(-2px); }
+.page.is-language-changing .brand-version { transform: translateY(-2px); }
 .page.is-language-changing .launcher-frame { transform: translateY(4px) scale(0.995); }
 .page.is-language-changing .advanced-settings-page { transform: translateY(4px) scale(0.995); }
 .page.is-language-changing .status-block { transform: translateY(3px); }
@@ -160,6 +163,15 @@ body {
   font-weight: 600;
   line-height: 1;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-version {
+  color: rgba(255, 255, 255, 0.4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.61rem;
+  font-weight: 600;
+  letter-spacing: 0.015em;
   white-space: nowrap;
 }
 

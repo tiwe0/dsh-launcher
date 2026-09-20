@@ -36,6 +36,7 @@ import {
   StopRounded,
   TranslateRounded,
 } from "@mui/icons-material";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -47,6 +48,7 @@ import "./App.css";
 const DEFAULT_NODE_VERSION = "24.21.0";
 const NODE_VERSIONS = ["24.21.0", "26.9.0"];
 const DEFAULT_DSH_VERSION = "0.1.6-alpha.2";
+const FALLBACK_APP_VERSION = "0.1.1";
 
 type RuntimeStatus = {
   ready: boolean;
@@ -119,6 +121,7 @@ function displayWorkspacePath(path: string) {
 export default function App() {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState(EMPTY_STATUS);
+  const [appVersion, setAppVersion] = useState(FALLBACK_APP_VERSION);
   const [versions, setVersions] = useState<DshVersion[]>([]);
   const [remoteVersions, setRemoteVersions] = useState<string[]>([]);
   const [nodeVersion, setNodeVersion] = useState(DEFAULT_NODE_VERSION);
@@ -211,6 +214,13 @@ export default function App() {
       unlisten?.();
     };
   }, [refresh, t]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void getVersion().then(setAppVersion).catch(() => {
+      // Keep the build-time fallback if native metadata is unavailable.
+    });
+  }, []);
 
   useEffect(() => () => {
     if (languageSwapTimer.current !== null) window.clearTimeout(languageSwapTimer.current);
@@ -481,6 +491,7 @@ export default function App() {
           <img className="brand-mark" src="/deepseek-mark.svg" alt="" />
           <span className="brand-name">deepseek</span>
           <span className="brand-badge">{t("brand.badge")}</span>
+          <span className="brand-version">v{appVersion}</span>
         </button>
         <div className="chrome-tools">
           <Tooltip title={t("links.openGitHub")}>
